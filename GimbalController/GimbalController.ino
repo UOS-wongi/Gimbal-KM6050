@@ -14,9 +14,13 @@ Servo servoY;
 Servo servoZ;
 
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
+int16_t _ax, _ay, _az;
+int16_t _gx, _gy, _gz;
 //센서 값 받아올 변수 선언
+
+double ax, ay, az;
+double gx, gy, gz;
+//센서 값을 정규화하여 담을 변수
 
 unsigned long lasttime = 0;
 //dt를 구하기 위한 변수
@@ -61,7 +65,7 @@ int servoYAngle = 0;
 int servoZAngle = 0;
 //서보모터의 각도
 
-const float alpha = 0.99;
+const float alpha = 0.8;
 double accAngleX = 0;
 double accAngleY = 0;
 double accAngleZ = 0;
@@ -99,48 +103,48 @@ void setup() {
 
 void loop() {
     //1단계: dt 구하기
-    //unsigned long now = millis();                            //현재 시간
-    //double dt = (now - lasttime) / 1000;                     //현재 시간과 이전 시간 사이의 간격을 dt로 설정
-    double dt = 0.015;
+    unsigned long now = millis();                            //현재 시간
+    double dt = (double)(now - lasttime)/1000; 
+
+    Serial.print(dt, 8); Serial.print("\t");                  //현재 시간과 이전 시간 사이의 간격을 dt로 설정
     //2단계: 데이터 읽기
-    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);      //센서 값 받아오기 => 가속도값 및 자이로스코프 값
-    ax/=(16383.0/90.0);
-    ay/=(16383.0/90.0);
-    az/=(16383.0/90.0);
-    gx/=131.0;
-    gy/=131.0;
-    gz/=131.0;
+    accelgyro.getMotion6(&_ax, &_ay, &_az, &_gx, &_gy, &_gz);      //센서 값 받아오기 => 가속도값 및 자이로스코프 값
+    ax = _ax / (16383.0/9.8);
+    ay = _ay / (16383.0/9.8);
+    az = _az / (16383.0/9.8);
+    gx = _gx / 131.0;
+    gy = _gy / 131.0;
+    gz = _gz / 131.0;
     Serial.print("a/g:\t");
     Serial.print(ax); Serial.print("\t");
     Serial.print(ay); Serial.print("\t");
     Serial.print(az); Serial.print("\t");
     Serial.print(gx); Serial.print("\t");
     Serial.print(gy); Serial.print("\t");
-    Serial.println(gz);                                      // 디버깅용 가속도 자이로 값 확인
+    Serial.print(gz); Serial.print("\t");   // 디버깅용 가속도 자이로 값 확인
     
 
     //3단계: 상보 필터를 이용한 각도 계산(롤, 피치, 요) => 구하는 방법과 공식에 대한 확인 필요
-    accAngleX = atan2(ay, sqrt(ax*ax + az*az));
-    accAngleY = atan2(-ax, sqrt(ay*ay + az*az));                         //가속도 센서를 이용한 각도
-    gyroAngleX = gx*dt;
-    gyroAngleY = gy*dt;
-    gyroAngleZ = gz*dt;                                                  //자이로 센서를 이용한 각도
-    //Roll = (alpha*gyroAngleX + (1-alpha)*accAngleX);          //상보 필터 공식을 이용해 롤 각도 구하기
-    //Pitch = (alpha*gyroAngleY + (1-alpha)*accAngleY);         //상보 필터 공식을 이용해 피치 각도 구하기
-    //Yaw += gyroAngleZ;                                                    //요 각도 구하기
+    accAngleX = atan2(ay, sqrt(ax*ax + az*az))*RAD_TO_DEG; //rad -> deg
+    accAngleY = atan2(-ax, sqrt(ay*ay + az*az))*RAD_TO_DEG; //rad -> deg         //가속도 센서를 이용한 각도     
 
-    Roll = (alpha*(Roll*DEG_TO_RAD + gx*dt) + (1-alpha)*accAngleX)*RAD_TO_DEG;          //상보 필터 공식을 이용해 롤 각도 구하기
-    Pitch = (alpha*(Pitch*DEG_TO_RAD + gy*dt) + (1-alpha)*accAngleY)*RAD_TO_DEG;         //상보 필터 공식을 이용해 피치 각도 구하기
+    Roll = (alpha*(Roll + gx*dt) + (1-alpha)*accAngleX);          //상보 필터 공식을 이용해 롤 각도 구하기
+    Pitch = (alpha*(Pitch + gy*dt) + (1-alpha)*accAngleY);         //상보 필터 공식을 이용해 피치 각도 구하기
     Yaw += gz * dt;                                                                     //요 각도 구하기
+    Serial.print("Roll, pitch, yaw: ");
+    Serial.print(Roll); Serial.print("  ");   
+    Serial.print(Pitch); Serial.print("  ");   
+    Serial.print(Yaw); Serial.print("  "); 
 
     //4단계: 오차 구하기    
     errorRoll = setpointRoll - Roll;
     errorPitch = setpointPitch - Pitch;
     errorYaw = setpointYaw - Yaw;                             //오차 구하기 -> 원하는 각도(setpoint)와 현재 각도 사이의 차이
-    Serial.print("eR/eP/eY:");
+    Serial.print("eR/eP/eY:  ");
     Serial.print(errorRoll); Serial.print("\t");
     Serial.print(errorPitch); Serial.print("\t");
-    Serial.println(errorYaw); 
+    Serial.print(errorYaw);  Serial.print("\t"); 
+    
     //5단계: pid 제어
     outputRoll = kp*errorRoll + ki*integralRoll + kd*(errorRoll - lasterrorRoll)/dt;
     outputPitch = kp*errorPitch + ki*integralPitch + kd*(errorPitch - lasterrorPitch)/dt;
@@ -148,7 +152,7 @@ void loop() {
     Serial.print("r/p/y:\t");
     Serial.print(outputRoll); Serial.print("\t");
     Serial.print(outputPitch); Serial.print("\t");
-    Serial.println(outputYaw);
+    Serial.print(outputYaw);
     //6단계: 액추에이터(서보모터) 작동 및 프로세스
     servoXAngle = map(outputRoll, -90, 90, 0, 180);
     servoYAngle = map(outputPitch, -90, 90, 0, 180);
@@ -163,7 +167,8 @@ void loop() {
     lasterrorYaw = errorYaw;
     integralRoll += errorRoll*dt;
     integralPitch += errorPitch*dt;
-    integralYaw += errorYaw*dt;
-    delay(50);
-    //lasttime = now;                                           //값에 대한 피드백
+    integralYaw += errorYaw*dt;         //값에 대한 피드백
+    Serial.println();
+    
+    lasttime = now;                                   
 }
