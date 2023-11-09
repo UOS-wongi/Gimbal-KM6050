@@ -2,9 +2,8 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 //#include "MPU6050.h" -- dmp를 사용하기 위해 라이브러리 변경
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-    #include "Wire.h"
-#endif
+#include "Wire.h"
+#include "PID_v1.h"
 //라이브러리 설정
 
 #define DEBUG
@@ -23,14 +22,12 @@
 
 #define SERVO_X 9
 #define SERVO_Y 10
-#define SERVO_Z 11
 #define INTERRUPT 2
 //핀 설정
 MPU6050 accelgyro;
 
 Servo servoX;
 Servo servoY;
-Servo servoZ;
 
 int16_t _ax, _ay, _az;
 int16_t _gx, _gy, _gz;
@@ -58,43 +55,25 @@ Quaternion q;
 
 double setpointRoll = 0.0;
 double setpointPitch = 0.0;
-double setpointYaw = 0.0;
-//원하는 롤, 피치, 요 각도
-
-double errorRoll = 0.0;
-double errorPitch = 0.0;
-double errorYaw = 0.0;
-//원하는 각도와 실제 각도 사이의 오차
-
-double lasterrorRoll = 0.0;
-double lasterrorPitch = 0.0;
-double lasterrorYaw = 0.0;
-//적분할 때 필요한 이전 각도 요소
-
-double integralRoll = 0.0;
-double integralPitch = 0.0;
-double integralYaw = 0.0;
-//적분기에 사용되는 각도 요소 -> 오차에 dt를 곱해 구함
+//원하는 롤, 피치 각도
 
 double outputRoll = 0.0;
 double outputPitch = 0.0;
-double outputYaw = 0.0;
 //출력되는 각도
 
 int servoXAngle = 0;
 int servoYAngle = 0;
-int servoZAngle = 0;
 //서보모터의 각도
 
-const float alpha = 0.8;
+const float alpha = 0.99;
 double accAngleX = 0;
 double accAngleY = 0;
-double accAngleZ = 0;
 double gyroAngleX = 0;
 double gyroAngleY = 0;
-double gyroAngleZ = 0;
 //상보 필터 변수
 
+PID pidRoll(&Roll, &outputRoll, &setpointRoll, kp, ki, kd, DIRECT);
+PID pidPitch(&Pitch, &outputPitch, &setpointPitch, kp, ki, kd, DIRECT);
 uint8_t devStatus;
 uint8_t fifoBuffer[128];
 
@@ -110,7 +89,6 @@ void setup() {
 
     servoX.attach(SERVO_X);
     servoY.attach(SERVO_Y);
-    servoZ.attach(SERVO_Z);
 
     Serial.begin(38400); 
     //디버깅용
@@ -135,13 +113,16 @@ void setup() {
       accelgyro.setDMPEnabled(true);
       //현재 MPU6050 상태를 기준으로 Calibration
     }
+
+    pidRoll.SetMode(AUTOMATIC);
+    pidPitch.SetMode(AUTOMATIC);
     
 }
 
 void loop() {
     //1단계: dt 구하기
     unsigned long now = millis();                                   //현재 시간
-    double dt = (double)(now - lasttime)/1000; 
+    double dt = (now - lasttime)*0.001; 
 
     #ifdef OUTPUT_READABLE_TIME
       Serial.print(dt, 8); Serial.print("\t");                      //현재 시간과 이전 시간 사이의 간격을 dt로 설정
@@ -173,7 +154,7 @@ void loop() {
     #endif
   
     #ifdef OUTPUT_READABLE_QUATERNION
-      Serial.print("quat"); Serial.print("\t");
+      Serial.print("Quat"); Serial.print("\t");
       Serial.print(q.w); Serial.print("\t");
       Serial.print(q.x); Serial.print("\t");
       Serial.print(q.y); Serial.print("\t");
@@ -210,44 +191,31 @@ void loop() {
     #endif 
 
     //4단계: 오차 구하기    
-    errorRoll = setpointRoll - Roll;
-    errorPitch = setpointPitch - Pitch;
-    errorYaw = setpointYaw - Yaw;                                   //오차 구하기 -> 원하는 각도(setpoint)와 현재 각도 사이의 차이
+    double errorRoll = setpointRoll - Roll;
+    double errorPitch = setpointPitch - Pitch;                             //오차 구하기 -> 원하는 각도(setpoint)와 현재 각도 사이의 차이
 
     #ifdef OUTPUT_READABLE_ERRORRPY
-      Serial.print("eR/eP/eY:  ");
+      Serial.print("eR/eP:  ");
       Serial.print(errorRoll); Serial.print("\t");
       Serial.print(errorPitch); Serial.print("\t");
-      Serial.print(errorYaw);  Serial.print("\t"); 
     #endif
 
     //5단계: pid 제어
-    outputRoll = kp*errorRoll + ki*integralRoll + kd*(errorRoll - lasterrorRoll)/dt;
-    outputPitch = kp*errorPitch + ki*integralPitch + kd*(errorPitch - lasterrorPitch)/dt;
-    outputYaw = kp*errorYaw + ki*integralYaw + kd*(errorYaw - lasterrorYaw)/dt;             //각 각도에 대해 pid 제어 연산을 수행해 출력 값을 찾기
+
+    pidRoll.Compute();
+    pidPitch.Compute();
 
     #ifdef OUTPUT_READABLE_OUTRPY
-      Serial.print("r/p/y:\t");
+      Serial.print("r/p:\t");
       Serial.print(outputRoll); Serial.print("\t");
       Serial.print(outputPitch); Serial.print("\t");
-      Serial.print(outputYaw);
     #endif
 
     //6단계: 액추에이터(서보모터) 작동 및 프로세스
     servoXAngle = map(outputRoll, -90, 90, 0, 180);
-    servoYAngle = map(outputPitch, -90, 90, 0, 180);
-    servoZAngle = map(outputYaw, -90, 90, 0, 180);                  //서보모터 동작 가용범위로 바꿔주기
+    servoYAngle = map(outputPitch, -90, 90, 0, 180);                //서보모터 동작 가용범위로 바꿔주기
     servoX.write(servoXAngle);
-    servoY.write(servoYAngle);
-    servoZ.write(servoZAngle);                                      //서보모터(액추에이터) 작동
-    
-    //7단계: 피드백
-    lasterrorRoll = errorRoll;
-    lasterrorPitch = errorPitch;
-    lasterrorYaw = errorYaw;
-    integralRoll += errorRoll*dt;
-    integralPitch += errorPitch*dt;
-    integralYaw += errorYaw*dt;                                     //값에 대한 피드백
+    servoY.write(servoYAngle);                                      //서보모터(액추에이터) 작동
 
     #ifdef DEBUG
       Serial.println();
